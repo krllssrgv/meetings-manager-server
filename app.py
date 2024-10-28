@@ -227,7 +227,7 @@ class CheckLogin(Resource):
                 'lastname': user.lastname,
                 'fathername': user.fathername,
                 'owner': user.owner
-            }, 204
+            }, 200
         else:
             return '', 401
         
