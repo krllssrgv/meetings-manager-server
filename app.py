@@ -282,7 +282,6 @@ class GetUser(Resource):
                 'name': user.name,
                 'lastname': user.lastname,
                 'fathername': user.fathername,
-                'owner': user.owner
             }, 200
         else:
             return '', 401
