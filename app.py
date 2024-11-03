@@ -54,7 +54,8 @@ db = SQLAlchemy(app)
 migrate = Migrate(app, db)
 
 
-class users(db.Model):
+# Entities
+class Users(db.Model):
     __tablename__ = 'users'
     id = db.Column(db.Integer, primary_key=True)
     email = db.Column(db.String(80), nullable=False)
@@ -62,13 +63,81 @@ class users(db.Model):
     name = db.Column(db.String(40), nullable=False)
     lastname = db.Column(db.String(40), nullable=False)
     fathername = db.Column(db.String(40), nullable=False)
-    owner = db.Column(db.Boolean, nullable=False, default=False)
 
     confirmed = db.Column(db.Boolean, default=False, nullable=False)
     code = db.Column(db.String(6), nullable=False)
 
     def __repr__(self):
-        return '<users %r>' % self.id
+        return '<Users %r>' % self.id
+    
+
+class Organizations(db.Model):
+    __tablename__ = 'organizations'
+    id = db.Column(db.Integer, primary_key=True)
+    name = db.Column(db.String(100), nullable=False)
+    owner = db.Column(db.Integer, db.ForeignKey('users.id'))
+
+    user = db.relationship('Users', backref='owned_organizations')
+
+    def __repr__(self):
+        return '<Organizations %r>' % self.id
+    
+
+class Classrooms(db.Model):
+    __tablename__ = 'classrooms'
+    id = db.Column(db.Integer, primary_key=True)
+    name = db.Column(db.String(100), nullable=False)
+    description = db.Column(db.Text, nullable=True)
+    organization_id = db.Column(db.Integer, db.ForeignKey('organizations.id'))
+
+    organization = db.relationship('Organizations', backref=db.backref('classrooms', cascade="all, delete-orphan"))
+
+
+class Events(db.Model):
+    __tablename__ = 'events'
+    id = db.Column(db.Integer, primary_key=True)
+    organizer_id = db.Column(db.Integer, db.ForeignKey('users.id'))
+    title = db.Column(db.String(100), nullable=False)
+    description = db.Column(db.Text, nullable=True)
+    classroom_id = db.Column(db.Integer, db.ForeignKey('classrooms.id'))
+    time_slot_id = db.Column(db.Integer, db.ForeignKey('time_slots.id'), nullable=False)
+
+    organizer = db.relationship('Users', backref=db.backref('organized_events', cascade="all, delete-orphan"))
+    classroom = db.relationship('Classrooms', backref=db.backref('events', cascade="all, delete-orphan"))
+    time_slot = db.relationship('TimeSlots', backref=db.backref('events', cascade="all, delete-orphan"))
+
+
+class TimeSlots(db.Model):
+    __tablename__ = 'time_slots'
+
+    id = db.Column(db.Integer, primary_key=True)
+    date = db.Column(db.Integer, nullable=False)
+    start_time = db.Column(db.Integer, nullable=False)
+    end_time = db.Column(db.Integer, nullable=False)
+    classroom_id = db.Column(db.Integer, db.ForeignKey('classrooms.id'), nullable=False)
+
+    classroom = db.relationship('Classrooms', backref=db.backref('time_slots', cascade="all, delete-orphan"))
+
+
+# Associations
+class UserOrganization(db.Model):
+    __tablename__ = 'user_organization'
+    user_id = db.Column(db.Integer, db.ForeignKey('users.id'), primary_key=True)
+    organization_id = db.Column(db.Integer, db.ForeignKey('organizations.id'), primary_key=True)
+    
+    user = db.relationship('Users', backref=db.backref('user_organization', cascade="all, delete-orphan"))
+    organization = db.relationship('Organizations', backref=db.backref('user_organization', cascade="all, delete-orphan"))
+
+    
+class EventMembers(db.Model):
+    __tablename__ = 'event_members'
+
+    event_id = db.Column(db.Integer, db.ForeignKey('events.id'), primary_key=True)
+    user_id = db.Column(db.Integer, db.ForeignKey('users.id'), primary_key=True)
+    
+    event = db.relationship('Events', backref=db.backref('participants', cascade="all, delete-orphan"))
+    user = db.relationship('Users', backref=db.backref('participated_events', cascade="all, delete-orphan"))
+
 
 
 # Models
@@ -84,7 +153,6 @@ user_register_model = auth_api.model('user_login', {
     'name': fields.String(required=True, description='name'),
     'lastname': fields.String(required=True, description='lastname'),
     'fathername': fields.String(required=True, description='fathername'),
-    'as_org': fields.Boolean(required=True, description='as_org')
 })
 
 user_confirm_model = auth_api.model('user_confirm', {
@@ -121,7 +189,7 @@ class MyModelView(ModelView):
     
 
 admin = Admin(app, name='Admin', template_mode='bootstrap3', index_view=MyAdminIndexView())
-admin.add_view(MyModelView(users, db.session))
+admin.add_view(MyModelView(Users, db.session))
 
 
 # User API
@@ -131,7 +199,7 @@ class Register(Resource):
     def post(self):
         data = request.json
 
-        if (users.query.filter(users.email == data['email']).all()):
+        if (Users.query.filter(Users.email == data['email']).all()):
             return {'error': 'Пользователь уже существует'}, 400
         
         if not (len(data['email'])):
@@ -153,26 +221,14 @@ class Register(Resource):
             return {'error': 'Пароли не совпадают'}, 400
         
         code = create_code()
-        if (data['as_org']):
-            new_user = users(
-                email=str(data['email']),
-                password=generate_password_hash(str(data['password'])),
-                name=str(data['name']),
-                lastname=str(data['lastname']),
-                fathername=str(data['fathername']),
-                owner=data['as_org'],
-                code=code
-            )
-        else:
-            new_user = users(
-                email=str(data['email']),
-                password=generate_password_hash(str(data['password'])),
-                name=str(data['name']),
-                lastname=str(data['lastname']),
-                fathername=str(data['fathername']),
-                owner=data['as_org'],
-                code=code
-            )
+        new_user = Users(
+            email=str(data['email']),
+            password=generate_password_hash(str(data['password'])),
+            name=str(data['name']),
+            lastname=str(data['lastname']),
+            fathername=str(data['fathername']),
+            code=code
+        )
         try:
             db.session.add(new_user)
             db.session.commit()
@@ -187,7 +243,7 @@ class Login(Resource):
     @auth_api.expect(user_login_model)
     def post(self):
         data = request.json
-        user = users.query.filter_by(email=data['email']).first()
+        user = Users.query.filter_by(email=data['email']).first()
         if user:
             if check_password_hash(user.password, data['password']):
                 access_token = create_access_token(identity=user.id)
@@ -204,7 +260,7 @@ class Login(Resource):
 class Logout(Resource):
     @jwt_required(optional=True)
     def post(self):
-        user = db.session.get(users, get_jwt_identity())
+        user = db.session.get(Users, get_jwt_identity())
         if (user):
             jti = get_jwt()['jti']
             BLACKLIST.add(jti)
@@ -216,10 +272,10 @@ class Logout(Resource):
     
 
 @auth_api.route('/get_user')
-class CheckLogin(Resource):
+class GetUser(Resource):
     @jwt_required(optional=True)
     def get(self):
-        user = db.session.get(users, get_jwt_identity())
+        user = db.session.get(Users, get_jwt_identity())
         if (user):
             return {
                 'email': user.email,
@@ -237,7 +293,7 @@ class ConfirmEmail(Resource):
     @jwt_required(optional=True)
     @auth_api.expect(user_confirm_model)
     def post(self):
-        user = db.session.get(users, get_jwt_identity())
+        user = db.session.get(Users, get_jwt_identity())
 
         if (user):
             if (not user.confirmed):
@@ -263,7 +319,7 @@ class ConfirmEmail(Resource):
 class RemoveUser(Resource):
     @jwt_required(optional=True)
     def post(self):
-        user = db.session.get(users, get_jwt_identity())
+        user = db.session.get(Users, get_jwt_identity())
 
         if (user):
             try:
@@ -281,33 +337,89 @@ class RemoveUser(Resource):
 
 
 # Act API
-
-@act_api.route('/set_day_as_done')
-class DoneDay(Resource):
+@act_api.route('/create_org')
+class CreateOrg(Resource):
     @jwt_required(optional=True)
     def post(self):
-        user = db.session.get(users, get_jwt_identity())
+        user = db.session.get(Users, get_jwt_identity())
 
         if (user):
             data = request.json
-            if ('set_day' in data):
-                if (data['set_day'] == 1):
-                    user.day_one = True
-                elif (data['set_day'] == 2):
-                    user.day_two = True
-                elif (data['set_day'] == 3):
-                    user.day_three = True
-                    
-                if (user.day_one and user.day_two and user.day_three):
-                    user.success = '0'
+            new_org = Organizations(
+                name=data['name'],
+                owner = user.id
+            )
+            try:
+                db.session.add(new_org)
+                db.session.commit()
+                return '', 200
+            except:
+                return '', 500
+        else:
+            return '', 401
+        
 
-                try:
-                    db.session.commit()
-                    return '', 200
-                except:
-                    return '', 500
-            else:
-                    return '', 400
+@act_api.route('/create_room')
+class CreateRoom(Resource):
+    @jwt_required(optional=True)
+    def post(self):
+        user = db.session.get(Users, get_jwt_identity())
+
+        if (user):
+            data = request.json
+            new_room = Classrooms(
+                name=data['name'],
+                description=data['description'],
+                organization_id=data['organization_id']
+            )
+            try:
+                db.session.add(new_room)
+                db.session.commit()
+                return '', 200
+            except:
+                return '', 500
+        else:
+            return '', 401
+        
+
+@act_api.route('/create_event')
+class CreateEvent(Resource):
+    @jwt_required(optional=True)
+    def post(self):
+        user = db.session.get(Users, get_jwt_identity())
+
+        if (user):
+            data = request.json
+            new_time_slot = TimeSlots(
+                date=data['date'],
+                start_time=data['start_time'],
+                end_time=data['end_time'],
+                classroom_id=data['classroom']
+            )
+
+            new_event = Events(
+                organizer_id=user.id,
+                title=data['title'],
+                description=data['description'],
+                classroom_id=data['classroom'],
+                time_slot_id=new_time_slot.id
+            )
+
+            members = []
+            for e in data['members']:
+                members.push(EventMembers(
+                    event_id=new_event.id,
+                    user_id=e.id,
+                ))
+            try:
+                db.session.add(new_time_slot)
+                db.session.add(new_event)
+                for e in members:
+                    db.session.add(members)
+                db.session.commit()
+                return '', 200
+            except:
+                return '', 500
         else:
             return '', 401
 
@@ -316,7 +428,7 @@ class DoneDay(Resource):
 class Result(Resource):
     @jwt_required(optional=True)
     def post(self):
-        user = db.session.get(users, get_jwt_identity())
+        user = db.session.get(Users, get_jwt_identity())
 
         if (user):
             data = request.json
