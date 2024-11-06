@@ -4,6 +4,6 @@ SQLALCHEMY_DATABASE_URI = 'sqlite:///project.db'
 
 SMTP_SERVER = 'smtp.yandex.ru'
 SMTP_PORT = 465
-EMAIL = 'fputeam@yandex.ru'
-EMAIL_LOGIN = 'fputeam'
-EMAIL_PASSWORD = 'wrodsdnewiecorih'
+EMAIL = ''
+EMAIL_LOGIN = ''
+EMAIL_PASSWORD = ''
