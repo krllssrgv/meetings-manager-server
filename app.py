@@ -37,7 +37,7 @@ app.config['JWT_COOKIE_CSRF_PROTECT'] = False
 
 
 # CORS
-CORS(app, supports_credentials=True)
+CORS(app, supports_credentials=True, origins=["http://localhost:5173"])
 
 # JWT
 jwt = JWTManager(app)
