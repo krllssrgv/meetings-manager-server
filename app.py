@@ -37,7 +37,7 @@ app.config['JWT_COOKIE_CSRF_PROTECT'] = False
 
 
 # CORS
-CORS(app, supports_credentials=True, origins=["http://localhost:5173"])
+CORS(app, supports_credentials=True)
 
 # JWT
 jwt = JWTManager(app)
@@ -475,4 +475,5 @@ app.register_blueprint(api_bp)
 
 
 if __name__ == '__main__':
-    app.run(debug=False)
+    app.run(debug=True)
+    app.run(debug=True, ssl_context=('cert.pem', 'key.pem'))
