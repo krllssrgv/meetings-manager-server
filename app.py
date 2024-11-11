@@ -1,21 +1,17 @@
-from flask import Flask, request, Blueprint, make_response, redirect, url_for, flash, render_template
+from flask import Flask, request, Blueprint, make_response
 from flask_sqlalchemy import SQLAlchemy
-from flask_migrate import Migrate, upgrade, init, migrate
+from flask_migrate import Migrate
 from flask_jwt_extended import JWTManager, create_access_token, jwt_required, get_jwt_identity, get_jwt, set_access_cookies, unset_jwt_cookies
 from flask_cors import CORS
 from flask_restx import Api, Resource, Namespace, fields
-from flask_admin import Admin, AdminIndexView, expose
+from flask_admin import Admin
 from flask_admin.contrib.sqla import ModelView
-from flask_wtf import FlaskForm
-from wtforms import StringField, PasswordField, SubmitField
-from wtforms.validators import DataRequired
 
 from werkzeug.security import generate_password_hash, check_password_hash
 
 from datetime import timedelta
 
 from check_user import send_email, create_code
-from admin import AdminUser
 
 from config import SECRET_KEY, JWT_SECRET_KEY, SQLALCHEMY_DATABASE_URI
 
@@ -28,9 +24,7 @@ app.config['SECRET_KEY'] = SECRET_KEY
 app.config['JWT_SECRET_KEY'] = JWT_SECRET_KEY
 app.config['JWT_TOKEN_LOCATION'] = ['cookies']
 app.config['JWT_COOKIE_CSRF_PROTECT'] = True
-app.config['JWT_ACCESS_TOKEN_EXPIRES'] = timedelta(days=15)
-app.config['JWT_BLACKLIST_ENABLED'] = True
-app.config['JWT_BLACKLIST_TOKEN_CHECKS'] = ['access']
+app.config['JWT_ACCESS_TOKEN_EXPIRES'] = timedelta(days=5)
 app.config['JWT_COOKIE_SAMESITE'] = 'None'
 app.config['JWT_COOKIE_SECURE'] = True
 app.config['JWT_COOKIE_CSRF_PROTECT'] = False
@@ -63,12 +57,8 @@ class Users(db.Model):
     name = db.Column(db.String(40), nullable=False)
     lastname = db.Column(db.String(40), nullable=False)
     fathername = db.Column(db.String(40), nullable=False)
-
     confirmed = db.Column(db.Boolean, default=False, nullable=False)
     code = db.Column(db.String(6), nullable=False)
-
-    def __repr__(self):
-        return '<Users %r>' % self.id
     
 
 class Organizations(db.Model):
@@ -79,44 +69,16 @@ class Organizations(db.Model):
 
     user = db.relationship('Users', backref='owned_organizations')
 
-    def __repr__(self):
-        return '<Organizations %r>' % self.id
-    
-
-class Classrooms(db.Model):
-    __tablename__ = 'classrooms'
-    id = db.Column(db.Integer, primary_key=True)
-    name = db.Column(db.String(100), nullable=False)
-    description = db.Column(db.Text, nullable=True)
-    organization_id = db.Column(db.Integer, db.ForeignKey('organizations.id'))
-
-    organization = db.relationship('Organizations', backref=db.backref('classrooms', cascade="all, delete-orphan"))
-
 
 class Events(db.Model):
     __tablename__ = 'events'
     id = db.Column(db.Integer, primary_key=True)
     organizer_id = db.Column(db.Integer, db.ForeignKey('users.id'))
-    title = db.Column(db.String(100), nullable=False)
+    title = db.Column(db.String(200), nullable=False)
+    room = db.Column(db.String(100), nullable=True)
     description = db.Column(db.Text, nullable=True)
-    classroom_id = db.Column(db.Integer, db.ForeignKey('classrooms.id'))
-    time_slot_id = db.Column(db.Integer, db.ForeignKey('time_slots.id'), nullable=False)
 
     organizer = db.relationship('Users', backref=db.backref('organized_events', cascade="all, delete-orphan"))
-    classroom = db.relationship('Classrooms', backref=db.backref('events', cascade="all, delete-orphan"))
-    time_slot = db.relationship('TimeSlots', backref=db.backref('events', cascade="all, delete-orphan"))
-
-
-class TimeSlots(db.Model):
-    __tablename__ = 'time_slots'
-
-    id = db.Column(db.Integer, primary_key=True)
-    date = db.Column(db.Integer, nullable=False)
-    start_time = db.Column(db.Integer, nullable=False)
-    end_time = db.Column(db.Integer, nullable=False)
-    classroom_id = db.Column(db.Integer, db.ForeignKey('classrooms.id'), nullable=False)
-
-    classroom = db.relationship('Classrooms', backref=db.backref('time_slots', cascade="all, delete-orphan"))
 
 
 # Associations
@@ -160,39 +122,17 @@ user_confirm_model = auth_api.model('user_confirm', {
 })
 
 
-BLACKLIST = set()
-
-@jwt.token_in_blocklist_loader
-def check_if_token_in_blacklist(jwt_header, jwt_payload):
-    jti = jwt_payload['jti']
-    return jti in BLACKLIST
-
-
-# Admin Login
-class AdminLoginForm(FlaskForm):
-    username = StringField('Username', validators=[DataRequired()])
-    password = PasswordField('Password', validators=[DataRequired()])
-    submit = SubmitField('Login')
-
 
 # Admin
-class MyAdminIndexView(AdminIndexView):
-    @expose('/')
-    @jwt_required()
-    def index(self):
-        return super(MyAdminIndexView, self).index()
-
-class MyModelView(ModelView):
-    @jwt_required()
-    def is_accessible(self):
-        return True
-    
-
-admin = Admin(app, name='Admin', template_mode='bootstrap3', index_view=MyAdminIndexView())
-admin.add_view(MyModelView(Users, db.session))
+admin = Admin(app, template_mode='bootstrap3')
+admin.add_view(ModelView(Users, db.session))
+admin.add_view(ModelView(Organizations, db.session))
+admin.add_view(ModelView(Events, db.session))
+admin.add_view(ModelView(UserOrganization, db.session))
+admin.add_view(ModelView(EventMembers, db.session))
 
 
-# User API
+# Auth API
 @auth_api.route('/register')
 class Register(Resource):
     @auth_api.expect(user_register_model)
@@ -262,8 +202,6 @@ class Logout(Resource):
     def post(self):
         user = db.session.get(Users, get_jwt_identity())
         if (user):
-            jti = get_jwt()['jti']
-            BLACKLIST.add(jti)
             response = make_response()
             unset_jwt_cookies(response)
             return response
@@ -356,30 +294,7 @@ class CreateOrg(Resource):
                 return '', 500
         else:
             return '', 401
-        
-
-@act_api.route('/create_room')
-class CreateRoom(Resource):
-    @jwt_required(optional=True)
-    def post(self):
-        user = db.session.get(Users, get_jwt_identity())
-
-        if (user):
-            data = request.json
-            new_room = Classrooms(
-                name=data['name'],
-                description=data['description'],
-                organization_id=data['organization_id']
-            )
-            try:
-                db.session.add(new_room)
-                db.session.commit()
-                return '', 200
-            except:
-                return '', 500
-        else:
-            return '', 401
-        
+         
 
 @act_api.route('/create_event')
 class CreateEvent(Resource):
@@ -389,19 +304,12 @@ class CreateEvent(Resource):
 
         if (user):
             data = request.json
-            new_time_slot = TimeSlots(
-                date=data['date'],
-                start_time=data['start_time'],
-                end_time=data['end_time'],
-                classroom_id=data['classroom']
-            )
-
             new_event = Events(
                 organizer_id=user.id,
                 title=data['title'],
+                room=data['room'],
                 description=data['description'],
                 classroom_id=data['classroom'],
-                time_slot_id=new_time_slot.id
             )
 
             members = []
@@ -411,7 +319,6 @@ class CreateEvent(Resource):
                     user_id=e.id,
                 ))
             try:
-                db.session.add(new_time_slot)
                 db.session.add(new_event)
                 for e in members:
                     db.session.add(members)
@@ -423,57 +330,13 @@ class CreateEvent(Resource):
             return '', 401
 
 
-@act_api.route('/send_result')
-class Result(Resource):
-    @jwt_required(optional=True)
-    def post(self):
-        user = db.session.get(Users, get_jwt_identity())
-
-        if (user):
-            data = request.json
-            if ('success' in data):
-                if (data['success']):
-                    user.success = '1'
-                else:
-                    user.success = '-1'
-                    
-                try:
-                    db.session.commit()
-                    return {'success': user.success}, 200
-                except:
-                    return '', 500 
-            else:
-                return '', 400
-        else:
-            return '', 401 
-        
-
-@app.route('/admin/login', methods=['GET', 'POST'])
-def admin_login():
-    form = AdminLoginForm()
-    if form.validate_on_submit():
-        username = form.username.data
-        password = form.password.data
-        
-        if (AdminUser.check_admin(username, password)):
-            access_token = create_access_token(identity=username)
-            response = make_response(redirect(url_for('admin.index')))
-            set_access_cookies(response, access_token)
-            return response
-        else:
-            flash('Invalid username or password')
-    
-    return render_template('login.html', form=form)
-
 
 # Register
 api.add_namespace(auth_api, path='/auth')
 api.add_namespace(act_api, path='/act')
-
 app.register_blueprint(api_bp)
 
 
 
 if __name__ == '__main__':
     app.run(debug=True)
-    app.run(debug=True, ssl_context=('cert.pem', 'key.pem'))
