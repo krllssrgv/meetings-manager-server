@@ -28,8 +28,3 @@ def send_email(email, code):
         return {'success': True}
     except Exception as e:
         return {'success': False, 'error': e}
-
-
-def create_code():
-    characters = ascii_lowercase + digits
-    return ''.join(choices(characters, k=6))

@@ -6,13 +6,8 @@ from flask_cors import CORS
 from flask_restx import Api, Resource, Namespace, fields
 from flask_admin import Admin
 from flask_admin.contrib.sqla import ModelView
-
 from werkzeug.security import generate_password_hash, check_password_hash
-
 from datetime import timedelta
-
-from check_user import send_email, create_code
-
 from config import SECRET_KEY, JWT_SECRET_KEY, SQLALCHEMY_DATABASE_URI
 
 
@@ -57,8 +52,12 @@ class Users(db.Model):
     name = db.Column(db.String(40), nullable=False)
     lastname = db.Column(db.String(40), nullable=False)
     fathername = db.Column(db.String(40), nullable=False)
-    confirmed = db.Column(db.Boolean, default=False, nullable=False)
-    code = db.Column(db.String(6), nullable=False)
+
+    organizations = db.relationship('UserOrganization', cascade="all, delete-orphan")
+    owned_organizations = db.relationship('Organizations', cascade="all, delete-orphan")
+    meetings = db.relationship('MeetingMember', cascade="all, delete-orphan")
+    owned_meetings = db.relationship('Meetings', cascade="all, delete-orphan")
+    invitations = db.relationship('Invitations', cascade="all, delete-orphan")
     
 
 class Organizations(db.Model):
@@ -67,39 +66,41 @@ class Organizations(db.Model):
     name = db.Column(db.String(100), nullable=False)
     owner = db.Column(db.Integer, db.ForeignKey('users.id'))
 
-    user = db.relationship('Users', backref='owned_organizations')
+    meetings = db.relationship('Meetings', cascade="all, delete-orphan")
+    members = db.relationship('UserOrganization', cascade="all, delete-orphan")
 
 
-class Events(db.Model):
-    __tablename__ = 'events'
+class Meetings(db.Model):
+    __tablename__ = 'meetings'
     id = db.Column(db.Integer, primary_key=True)
     organizer_id = db.Column(db.Integer, db.ForeignKey('users.id'))
-    title = db.Column(db.String(200), nullable=False)
-    room = db.Column(db.String(100), nullable=True)
+    organization_id = db.Column(db.Integer, db.ForeignKey('organizations.id'))
+    title = db.Column(db.Text, nullable=False)
+    place = db.Column(db.Text, nullable=False)
     description = db.Column(db.Text, nullable=True)
-
-    organizer = db.relationship('Users', backref=db.backref('organized_events', cascade="all, delete-orphan"))
+    time = db.Column(db.String(10), nullable=False)
 
 
 # Associations
 class UserOrganization(db.Model):
     __tablename__ = 'user_organization'
-    user_id = db.Column(db.Integer, db.ForeignKey('users.id'), primary_key=True)
-    organization_id = db.Column(db.Integer, db.ForeignKey('organizations.id'), primary_key=True)
-    
-    user = db.relationship('Users', backref=db.backref('user_organization', cascade="all, delete-orphan"))
-    organization = db.relationship('Organizations', backref=db.backref('user_organization', cascade="all, delete-orphan"))
+    id = db.Column(db.Integer, primary_key=True)
+    user_id = db.Column(db.Integer, db.ForeignKey('users.id'))
+    organization_id = db.Column(db.Integer, db.ForeignKey('organizations.id'))
 
     
-class EventMembers(db.Model):
-    __tablename__ = 'event_members'
+class MeetingMember(db.Model):
+    __tablename__ = 'meeting_members'
+    id = db.Column(db.Integer, primary_key=True)
+    meeting_id = db.Column(db.Integer, db.ForeignKey('meetings.id'))
+    user_id = db.Column(db.Integer, db.ForeignKey('users.id'))
 
-    event_id = db.Column(db.Integer, db.ForeignKey('events.id'), primary_key=True)
-    user_id = db.Column(db.Integer, db.ForeignKey('users.id'), primary_key=True)
-    
-    event = db.relationship('Events', backref=db.backref('participants', cascade="all, delete-orphan"))
-    user = db.relationship('Users', backref=db.backref('participated_events', cascade="all, delete-orphan"))
 
+class Invitations(db.Model):
+    __tablename__ = 'invitations'
+    id = db.Column(db.Integer, primary_key=True)
+    user_id = db.Column(db.Integer, db.ForeignKey('users.id'), nullable=False)
+    organization_id = db.Column(db.Integer, db.ForeignKey('organizations.id'), nullable=False)
 
 
 # Models
@@ -122,14 +123,14 @@ user_confirm_model = auth_api.model('user_confirm', {
 })
 
 
-
 # Admin
 admin = Admin(app, template_mode='bootstrap3')
 admin.add_view(ModelView(Users, db.session))
 admin.add_view(ModelView(Organizations, db.session))
-admin.add_view(ModelView(Events, db.session))
+admin.add_view(ModelView(Meetings, db.session))
 admin.add_view(ModelView(UserOrganization, db.session))
-admin.add_view(ModelView(EventMembers, db.session))
+admin.add_view(ModelView(MeetingMember, db.session))
+admin.add_view(ModelView(Invitations, db.session))
 
 
 # Auth API
@@ -160,19 +161,16 @@ class Register(Resource):
         if (data['password'] != data['repeated_password']):
             return {'error': 'Пароли не совпадают'}, 400
         
-        code = create_code()
         new_user = Users(
             email=str(data['email']),
             password=generate_password_hash(str(data['password'])),
             name=str(data['name']),
             lastname=str(data['lastname']),
             fathername=str(data['fathername']),
-            code=code
         )
         try:
             db.session.add(new_user)
             db.session.commit()
-            send_email(str(data['email']), code)
             return '', 204
         except:
             return '', 500
@@ -215,55 +213,41 @@ class GetUser(Resource):
     def get(self):
         user = db.session.get(Users, get_jwt_identity())
         if (user):
+            organizations = []
+            for e in user.organizations:
+                current_org = db.session.get(Organizations, e.organization_id)
+                organizations.append({
+                    'id': current_org.id,
+                    'name': current_org.name,
+                    'owned': (current_org.owner == user.id)
+                })
             return {
                 'email': user.email,
                 'name': user.name,
                 'lastname': user.lastname,
                 'fathername': user.fathername,
+                'organizations': organizations,
+                'invitations': [
+                    {
+                        'id': element.id,
+                        'user_id': element.user_id,
+                        'organization_id': element.organization_id
+                    } for element in user.invitations
+                ],
             }, 200
         else:
             return '', 401
+         
         
-
-@auth_api.route('/confirm_email')
-class ConfirmEmail(Resource):
-    @jwt_required(optional=True)
-    @auth_api.expect(user_confirm_model)
-    def post(self):
-        user = db.session.get(Users, get_jwt_identity())
-
-        if (user):
-            if (not user.confirmed):
-                code = request.json['code']
-                if (code == user.check_code):
-                    user.check_code = ''
-                    user.confirmed = True
-                    try:
-                        db.session.commit()
-                        return '', 204
-                    except:
-                        return '', 500
-                else:
-                    return {'error': 'Неправильный код'}, 400
-            else:
-                return {'error': 'Почта уже подтверждена'}, 400
-        else:
-            return '', 401
-        
-        
-
 @auth_api.route('/remove')
 class RemoveUser(Resource):
     @jwt_required(optional=True)
     def post(self):
         user = db.session.get(Users, get_jwt_identity())
-
         if (user):
             try:
                 db.session.delete(user)
                 db.session.commit()
-                jti = get_jwt()['jti']
-                BLACKLIST.add(jti)
                 response = make_response()
                 unset_jwt_cookies(response)
                 return response
@@ -274,6 +258,36 @@ class RemoveUser(Resource):
 
 
 # Act API
+@act_api.route('/get_org/<int:id>')
+class GetOrg(Resource):
+    @jwt_required(optional=True)
+    def get(self, id):
+        user = db.session.get(Users, get_jwt_identity())
+        if (user):
+            org = db.session.get(Organizations, id)
+            if (org):
+                members = []
+                for e in org.members:
+                    member = db.session.get(Users, e.user_id)
+                    members.append({
+                        'id': member.id,
+                        'email': member.email,
+                        'name': member.name,
+                        'lastname': member.lastname,
+                        'fathername': member.fathername
+                    })
+                return {
+                    'id': org.id,
+                    'name': org.name,
+                    'owner': org.owner,
+                    'members': members
+                }, 200
+            else:
+                return '', 404
+        else:
+            return '', 401
+        
+
 @act_api.route('/create_org')
 class CreateOrg(Resource):
     @jwt_required(optional=True)
@@ -282,19 +296,93 @@ class CreateOrg(Resource):
 
         if (user):
             data = request.json
-            new_org = Organizations(
-                name=data['name'],
-                owner = user.id
-            )
             try:
+                new_org = Organizations(
+                        name=data['name'],
+                        owner=user.id
+                )
                 db.session.add(new_org)
+                db.session.flush()
+                
+                new_membership = UserOrganization(
+                        user_id=user.id,
+                        organization_id=new_org.id
+                )
+
+                db.session.add(new_membership)
                 db.session.commit()
-                return '', 200
-            except:
+                return '', 204
+            except Exception as e:
+                print(e)
                 return '', 500
         else:
             return '', 401
          
+
+@act_api.route('/create_inv')
+class CreateInv(Resource):
+    @jwt_required(optional=True)
+    def post(self):
+        user = db.session.get(Users, get_jwt_identity())
+
+        if (user):
+            to_user = request.json['to_user']
+            existing_user = db.session.get(Users, to_user)
+            to_org = request.json['to_org']
+            existing_org = db.session.get(Organizations, to_org)
+
+
+            existing_invitation = Invitations.query.filter_by(
+                user_id=to_user,
+                organization_id=to_org
+            ).first()
+
+            if ((existing_invitation is None) and (existing_user is not None) and (existing_org is not None) and (user.id == existing_org.owner)):
+                try:
+                    new_invitation = Invitations(
+                        user_id=to_user,
+                        organization_id=to_org
+                    )
+                    db.session.add(new_invitation)
+                    db.session.commit()
+                    return '', 204
+                except:
+                    return '', 500
+            else:
+                return '', 400
+        else:
+            return '', 401
+
+
+@act_api.route('/accept_inv/<int:id>')
+class AcceptInv(Resource):
+    @jwt_required(optional=True)
+    def post(self, id):
+        user = db.session.get(Users, get_jwt_identity())
+
+        if (user):
+            inv = db.session.get(Invitations, id)
+
+            if ((inv is not None) and (inv.user_id == user.id)):
+                try:
+                    new_member = UserOrganization(
+                        user_id=inv.user_id,
+                        organization_id=inv.organization_id
+                    )
+                    db.session.add(new_member)
+                    db.session.flush()
+                    db.session.delete(inv)
+                    db.session.commit()
+                    return '', 204
+                except:
+                    return '', 500
+            else:
+                return '', 400
+        else:
+            return '', 401
+
+
+
 
 @act_api.route('/create_event')
 class CreateEvent(Resource):
@@ -304,7 +392,7 @@ class CreateEvent(Resource):
 
         if (user):
             data = request.json
-            new_event = Events(
+            new_event = Meetings(
                 organizer_id=user.id,
                 title=data['title'],
                 room=data['room'],
