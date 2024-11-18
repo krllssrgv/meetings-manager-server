@@ -79,6 +79,7 @@ class Meetings(db.Model):
     place = db.Column(db.Text, nullable=False)
     description = db.Column(db.Text, nullable=True)
     time = db.Column(db.String(10), nullable=False)
+    date = db.Column(db.String(), nullable=False)
 
 
 # Associations
@@ -221,19 +222,22 @@ class GetUser(Resource):
                     'name': current_org.name,
                     'owned': (current_org.owner == user.id)
                 })
+
+            invitations = []
+            for inv in user.invitations:
+                target_org = db.session.get(Organizations, inv.organization_id)
+                invitations.append({
+                    'id': inv.id,
+                    'organization': target_org.name
+                })
+
             return {
                 'email': user.email,
                 'name': user.name,
                 'lastname': user.lastname,
                 'fathername': user.fathername,
                 'organizations': organizations,
-                'invitations': [
-                    {
-                        'id': element.id,
-                        'user_id': element.user_id,
-                        'organization_id': element.organization_id
-                    } for element in user.invitations
-                ],
+                'invitations': invitations,
             }, 200
         else:
             return '', 401
@@ -327,20 +331,25 @@ class CreateInv(Resource):
 
         if (user):
             to_user = request.json['to_user']
-            existing_user = db.session.get(Users, to_user)
+            existing_user = Users.query.filter_by(email=to_user).first()
             to_org = request.json['to_org']
             existing_org = db.session.get(Organizations, to_org)
 
 
             existing_invitation = Invitations.query.filter_by(
-                user_id=to_user,
+                user_id=existing_user.id,
                 organization_id=to_org
             ).first()
 
-            if ((existing_invitation is None) and (existing_user is not None) and (existing_org is not None) and (user.id == existing_org.owner)):
+            existing_membership = UserOrganization.query.filter_by(
+                user_id=existing_user.id,
+                organization_id=to_org
+            ).first()
+
+            if ((existing_invitation is None) and (existing_user is not None) and (existing_org is not None) and (user.id == existing_org.owner) and (existing_membership is None)):
                 try:
                     new_invitation = Invitations(
-                        user_id=to_user,
+                        user_id=existing_user.id,
                         organization_id=to_org
                     )
                     db.session.add(new_invitation)
@@ -373,6 +382,33 @@ class AcceptInv(Resource):
                     db.session.flush()
                     db.session.delete(inv)
                     db.session.commit()
+                    org = db.session.get(Organizations, new_member.organization_id)
+                    return {
+                        'id': org.id,
+                        'name': org.name,
+                        'owned': (org.owner == user.id)
+                    }, 200
+                except:
+                    return '', 500
+            else:
+                return '', 400
+        else:
+            return '', 401
+
+
+@act_api.route('/reject_inv/<int:id>')
+class RejectInv(Resource):
+    @jwt_required(optional=True)
+    def post(self, id):
+        user = db.session.get(Users, get_jwt_identity())
+
+        if (user):
+            inv = db.session.get(Invitations, id)
+
+            if ((inv is not None) and (inv.user_id == user.id)):
+                try:
+                    db.session.delete(inv)
+                    db.session.commit()
                     return '', 204
                 except:
                     return '', 500
@@ -382,36 +418,28 @@ class AcceptInv(Resource):
             return '', 401
 
 
-
-
-@act_api.route('/create_event')
-class CreateEvent(Resource):
+@act_api.route('/create_meeting')
+class CreateMeeting(Resource):
     @jwt_required(optional=True)
     def post(self):
         user = db.session.get(Users, get_jwt_identity())
 
         if (user):
             data = request.json
-            new_event = Meetings(
+            new_meeting = Meetings(
                 organizer_id=user.id,
+                organization_id=data['org'],
                 title=data['title'],
-                room=data['room'],
+                place=data['place'],
                 description=data['description'],
-                classroom_id=data['classroom'],
+                time=data['time'],
+                date=data['date']
             )
 
-            members = []
-            for e in data['members']:
-                members.push(EventMembers(
-                    event_id=new_event.id,
-                    user_id=e.id,
-                ))
             try:
-                db.session.add(new_event)
-                for e in members:
-                    db.session.add(members)
+                db.session.add(new_meeting)
                 db.session.commit()
-                return '', 200
+                return '', 204
             except:
                 return '', 500
         else:
