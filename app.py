@@ -9,7 +9,8 @@ from flask_admin.contrib.sqla import ModelView
 from werkzeug.security import generate_password_hash, check_password_hash
 from datetime import timedelta
 from config import SECRET_KEY, JWT_SECRET_KEY, SQLALCHEMY_DATABASE_URI
-
+from datetime import datetime
+from copy import copy
 
 
 # App
@@ -18,7 +19,7 @@ app = Flask(__name__)
 app.config['SECRET_KEY'] = SECRET_KEY
 app.config['JWT_SECRET_KEY'] = JWT_SECRET_KEY
 app.config['JWT_TOKEN_LOCATION'] = ['cookies']
-app.config['JWT_COOKIE_CSRF_PROTECT'] = True
+# app.config['JWT_COOKIE_CSRF_PROTECT'] = True
 app.config['JWT_ACCESS_TOKEN_EXPIRES'] = timedelta(days=5)
 app.config['JWT_COOKIE_SAMESITE'] = 'None'
 app.config['JWT_COOKIE_SECURE'] = True
@@ -55,7 +56,6 @@ class Users(db.Model):
 
     organizations = db.relationship('UserOrganization', cascade="all, delete-orphan")
     owned_organizations = db.relationship('Organizations', cascade="all, delete-orphan")
-    meetings = db.relationship('MeetingMember', cascade="all, delete-orphan")
     owned_meetings = db.relationship('Meetings', cascade="all, delete-orphan")
     invitations = db.relationship('Invitations', cascade="all, delete-orphan")
     
@@ -88,13 +88,6 @@ class UserOrganization(db.Model):
     id = db.Column(db.Integer, primary_key=True)
     user_id = db.Column(db.Integer, db.ForeignKey('users.id'))
     organization_id = db.Column(db.Integer, db.ForeignKey('organizations.id'))
-
-    
-class MeetingMember(db.Model):
-    __tablename__ = 'meeting_members'
-    id = db.Column(db.Integer, primary_key=True)
-    meeting_id = db.Column(db.Integer, db.ForeignKey('meetings.id'))
-    user_id = db.Column(db.Integer, db.ForeignKey('users.id'))
 
 
 class Invitations(db.Model):
@@ -130,7 +123,6 @@ admin.add_view(ModelView(Users, db.session))
 admin.add_view(ModelView(Organizations, db.session))
 admin.add_view(ModelView(Meetings, db.session))
 admin.add_view(ModelView(UserOrganization, db.session))
-admin.add_view(ModelView(MeetingMember, db.session))
 admin.add_view(ModelView(Invitations, db.session))
 
 
@@ -185,7 +177,7 @@ class Login(Resource):
         user = Users.query.filter_by(email=data['email']).first()
         if user:
             if check_password_hash(user.password, data['password']):
-                access_token = create_access_token(identity=user.id)
+                access_token = create_access_token(identity=str(user.id))
                 response = make_response()
                 set_access_cookies(response, access_token)
                 return response
@@ -232,6 +224,7 @@ class GetUser(Resource):
                 })
 
             return {
+                'id': user.id,
                 'email': user.email,
                 'name': user.name,
                 'lastname': user.lastname,
@@ -276,15 +269,29 @@ class GetOrg(Resource):
                     members.append({
                         'id': member.id,
                         'email': member.email,
-                        'name': member.name,
-                        'lastname': member.lastname,
-                        'fathername': member.fathername
+                        'fullName': member.lastname + member.name + member.fathername,
                     })
+                meetings = []
+                for m in org.meetings:
+                    date_of_m = datetime.strptime(m.date, "%Y-%m-%d").date()
+                    today = datetime.today().date()
+                    if date_of_m >= today:
+                        organizer = db.session.get(Users, m.organizer_id)
+                        meetings.append({
+                            'id': m.id,
+                            'organizerName': f'{organizer.lastname} {organizer.name} {organizer.fathername}',
+                            'title': m.title,
+                            'place': m.place,
+                            'description': m.description,
+                            'time': m.time,
+                            'date': m.date
+                        })
                 return {
                     'id': org.id,
                     'name': org.name,
                     'owner': org.owner,
-                    'members': members
+                    'members': members,
+                    'meetings': meetings,
                 }, 200
             else:
                 return '', 404
@@ -309,13 +316,17 @@ class CreateOrg(Resource):
                 db.session.flush()
                 
                 new_membership = UserOrganization(
-                        user_id=user.id,
-                        organization_id=new_org.id
+                    user_id=user.id,
+                    organization_id=new_org.id
                 )
 
                 db.session.add(new_membership)
                 db.session.commit()
-                return '', 204
+                return {
+                    'id': new_org.id,
+                    'name': new_org.name,
+                    'owner': new_org.owner
+                }, 200
             except Exception as e:
                 print(e)
                 return '', 500
@@ -332,33 +343,50 @@ class CreateInv(Resource):
         if (user):
             to_user = request.json['to_user']
             existing_user = Users.query.filter_by(email=to_user).first()
-            to_org = request.json['to_org']
-            existing_org = db.session.get(Organizations, to_org)
+            if (existing_user is None):
+                return {
+                    'error': 'Такого пользователя не существует'
+                }, 400
+            else:
+                to_org = request.json['to_org']
+                existing_org = db.session.get(Organizations, to_org)
 
 
-            existing_invitation = Invitations.query.filter_by(
-                user_id=existing_user.id,
-                organization_id=to_org
-            ).first()
+                existing_invitation = Invitations.query.filter_by(
+                    user_id=existing_user.id,
+                    organization_id=to_org
+                ).first()
 
-            existing_membership = UserOrganization.query.filter_by(
-                user_id=existing_user.id,
-                organization_id=to_org
-            ).first()
-
-            if ((existing_invitation is None) and (existing_user is not None) and (existing_org is not None) and (user.id == existing_org.owner) and (existing_membership is None)):
-                try:
-                    new_invitation = Invitations(
+                if (existing_invitation is not None):
+                    return {
+                        'error': 'Приглашение этому пользователю уже существует'
+                    }, 400
+                else:
+                    existing_membership = UserOrganization.query.filter_by(
                         user_id=existing_user.id,
                         organization_id=to_org
-                    )
-                    db.session.add(new_invitation)
-                    db.session.commit()
-                    return '', 204
-                except:
-                    return '', 500
-            else:
-                return '', 400
+                    ).first()
+
+                    if (existing_membership is not None):
+                        return {
+                            'error': 'Пользователь уже в организации'
+                        }, 400
+                    else:
+                        if ((existing_org is not None) and (user.id == existing_org.owner) and (existing_membership is None)):
+                            try:
+                                new_invitation = Invitations(
+                                    user_id=existing_user.id,
+                                    organization_id=to_org
+                                )
+                                db.session.add(new_invitation)
+                                db.session.commit()
+                                return '', 204
+                            except:
+                                return '', 500
+                        else:
+                            return {
+                                'error': 'Ошибка на сервере'
+                            }, 400
         else:
             return '', 401
 
@@ -428,7 +456,7 @@ class CreateMeeting(Resource):
             data = request.json
             new_meeting = Meetings(
                 organizer_id=user.id,
-                organization_id=data['org'],
+                organization_id=data['organization_id'],
                 title=data['title'],
                 place=data['place'],
                 description=data['description'],
@@ -439,9 +467,56 @@ class CreateMeeting(Resource):
             try:
                 db.session.add(new_meeting)
                 db.session.commit()
-                return '', 204
+                return {
+                    'id': new_meeting.id,
+                    'organizerName': f'{user.lastname} {user.name} {user.fathername}',
+                    'title': new_meeting.title,
+                    'place': new_meeting.place,
+                    'description': new_meeting.description,
+                    'time': new_meeting.time,
+                    'date': new_meeting.date
+                }, 200
             except:
                 return '', 500
+        else:
+            return '', 401
+        
+
+@act_api.route('/remove_member')
+class RemoveMember(Resource):
+    @jwt_required(optional=True)
+    def delete(self):
+        user = db.session.get(Users, get_jwt_identity())
+        if (user):
+            data = request.json
+            membership = UserOrganization.query.filter_by(
+                    user_id=data['user_id'],
+                    organization_id=data['organization_id']
+                ).first()
+            if (membership is None):
+                return {
+                    'orgs_to_remove': []
+                }, 200
+            else:
+                user_meetings_owner = Meetings.query.filter_by(
+                    organizer_id=data['user_id'],
+                    organization_id=data['organization_id']
+                ).all()
+
+                result = []
+                for i in user_meetings_owner:
+                    result.append(copy(i.id))
+                try:
+                    for i in user_meetings_owner:
+                        db.session.delete(i)
+                        db.session.flush()
+                    db.session.delete(membership)
+                    db.session.commit()
+                    return {
+                        'orgs_to_remove': result
+                    }, 200
+                except:
+                    return '', 500
         else:
             return '', 401
 
