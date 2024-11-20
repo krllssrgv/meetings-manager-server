@@ -18,12 +18,12 @@ app = Flask(__name__)
 
 app.config['SECRET_KEY'] = SECRET_KEY
 app.config['JWT_SECRET_KEY'] = JWT_SECRET_KEY
-app.config['JWT_TOKEN_LOCATION'] = ['cookies']
-# app.config['JWT_COOKIE_CSRF_PROTECT'] = True
 app.config['JWT_ACCESS_TOKEN_EXPIRES'] = timedelta(days=5)
-app.config['JWT_COOKIE_SAMESITE'] = 'None'
-app.config['JWT_COOKIE_SECURE'] = True
-app.config['JWT_COOKIE_CSRF_PROTECT'] = False
+app.config['JWT_TOKEN_LOCATION'] = ['headers']
+# app.config['JWT_TOKEN_LOCATION'] = ['cookies']
+# app.config['JWT_COOKIE_SAMESITE'] = 'None'
+# app.config['JWT_COOKIE_SECURE'] = True
+# app.config['JWT_COOKIE_CSRF_PROTECT'] = False
 
 
 # CORS
@@ -178,26 +178,11 @@ class Login(Resource):
         if user:
             if check_password_hash(user.password, data['password']):
                 access_token = create_access_token(identity=str(user.id))
-                response = make_response()
-                set_access_cookies(response, access_token)
-                return response
+                return {'access_token': access_token}, 200
             else:
                 return {'error': 'Неправильный пароль'}, 401
         else:
             return {'error': 'Нет такого пользователя'}, 401
-
-
-@auth_api.route('/logout')
-class Logout(Resource):
-    @jwt_required(optional=True)
-    def post(self):
-        user = db.session.get(Users, get_jwt_identity())
-        if (user):
-            response = make_response()
-            unset_jwt_cookies(response)
-            return response
-        else:
-            return '', 401
     
 
 @auth_api.route('/get_user')
