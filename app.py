@@ -27,7 +27,7 @@ app.config['JWT_COOKIE_CSRF_PROTECT'] = False
 
 
 # CORS
-CORS(app, supports_credentials=True)
+CORS(app, supports_credentials=True, resources={r"/*": {"origins": "https://course-work-meetingsmanager-e9466b.edu-gitlab.ru/"}})
 
 # JWT
 jwt = JWTManager(app)
