@@ -236,22 +236,22 @@ class GetUser(Resource):
             return '', 401
          
         
-@auth_api.route('/remove')
-class RemoveUser(Resource):
-    @jwt_required(optional=True)
-    def post(self):
-        user = db.session.get(Users, get_jwt_identity())
-        if (user):
-            try:
-                db.session.delete(user)
-                db.session.commit()
-                response = make_response()
-                unset_jwt_cookies(response)
-                return response
-            except:
-                return '', 500
-        else:
-            return '', 401
+# @auth_api.route('/remove')
+# class RemoveUser(Resource):
+#     @jwt_required(optional=True)
+#     def post(self):
+#         user = db.session.get(Users, get_jwt_identity())
+#         if (user):
+#             try:
+#                 db.session.delete(user)
+#                 db.session.commit()
+#                 response = make_response()
+#                 unset_jwt_cookies(response)
+#                 return response
+#             except:
+#                 return '', 500
+#         else:
+#             return '', 401
 
 
 # Act API
