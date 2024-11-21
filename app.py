@@ -254,7 +254,7 @@ class GetOrg(Resource):
                     members.append({
                         'id': member.id,
                         'email': member.email,
-                        'fullName': f'{organizer.lastname} {organizer.name} {organizer.fathername},
+                        'fullName': f'{member.lastname} {member.name} {member.fathername},
                     })
                 meetings = []
                 for m in org.meetings:
